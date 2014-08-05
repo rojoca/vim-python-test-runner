@@ -4,8 +4,27 @@ import re
 import json
 
 
+def wrap_command(current_dir, command):
+    vagrant = get_json_field_from_config_file(current_dir, "vagrant")
+    if vagrant:
+        command = "vagrant ssh -c '{0}'".format(command)
+    return command
+
+
+def get_sed_command(current_dir):
+    vagrant = get_json_field_from_config_file(current_dir, "vagrant")
+    if not vagrant:
+        return "cat"
+    vagrant_path = get_json_field_from_config_file(current_dir, "manage")
+    current_dir = find_path_to_file(current_dir, '.vim-django').replace(
+        os.sep + '.vim-django', '')
+    return "sed 's|{0}|{1}|g'".format(vagrant_path, current_dir)
+
+
 def get_command_to_run_the_current_app(current_dir):
-    path_to_manage = find_path_to_file(current_dir, "manage.py")
+    path_to_manage = get_json_field_from_config_file(current_dir, "manage")
+    if not path_to_manage:
+        path_to_manage = find_path_to_file(current_dir, "manage.py")
     if not path_to_manage:
         return "Not Django"
     app_name = get_app_name(current_dir)
@@ -14,16 +33,18 @@ def get_command_to_run_the_current_app(current_dir):
     failfast = set_flag("failfast", failfast)
     nocapture = get_json_field_from_config_file(current_dir, "nocapture")
     nocapture = set_flag("nocapture", nocapture)
+    # vagrant ssh -c '/home/vagrant/virtualenvs/sem/bin/python2.6
+    # /vagrant/manage.py test product.tests.test_models'
     if app_name and env_name:
-        command = "{0} {1} test {2}{3}{4}".format(path_to_manage, env_name, failfast, nocapture, app_name)
-        write_test_command_to_cache_file(command)
-        return (command)
+        command = "{0} {1}/manage.py test {2}{3}{4}".format(
+            env_name, path_to_manage, failfast, nocapture, app_name)
     elif app_name:
-        command = "{0} test {1}{2}{3}".format(path_to_manage, failfast, nocapture, app_name)
-        write_test_command_to_cache_file(command)
-        return (command)
+        command = "{0}/manage.py test {1}{2}{3}".format(
+            path_to_manage, failfast, nocapture, app_name)
     else:
         return ".vim-django does not exist"
+    write_test_command_to_cache_file(command)
+    return (command)
 
 
 def command(command_to_run, cmd, path=True):
@@ -45,16 +66,21 @@ def get_command_to_run_the_current_file(current_dir):
     return command(command_to_current_app, cmd, path_to_tests)
 
 
-def get_command_to_run_the_current_class(current_dir, current_line, current_buffer):
+def get_command_to_run_the_current_class(current_dir,
+                                         current_line,
+                                         current_buffer):
     class_name = get_current_class(current_line, current_buffer)
     command_to_current_file = get_command_to_run_the_current_app(current_dir)
-    cmd = "{}:{}".format(get_command_to_run_the_current_file(current_dir), class_name)
+    cmd = "{}.{}".format(
+        get_command_to_run_the_current_file(current_dir), class_name)
     return command(command_to_current_file, cmd)
 
 
-def get_command_to_run_the_current_method(current_dir, current_line, current_buffer):
+def get_command_to_run_the_current_method(current_dir, current_line,
+                                          current_buffer):
     method_name = get_current_method(current_line, current_buffer)
-    command_to_current_class = get_command_to_run_the_current_class(current_dir, current_line, current_buffer)
+    command_to_current_class = get_command_to_run_the_current_class(
+        current_dir, current_line, current_buffer)
     cmd = "{}.{}".format(command_to_current_class, method_name)
     return command(command_to_current_class, cmd)
 
@@ -65,16 +91,22 @@ def get_command_to_run_current_file_with_nosetests(path_to_current_file):
     return command
 
 
-def get_command_to_run_current_class_with_nosetests(path_to_current_file, current_line, current_buffer):
-    run_file = get_command_to_run_current_file_with_nosetests(path_to_current_file)
+def get_command_to_run_current_class_with_nosetests(path_to_current_file,
+                                                    current_line,
+                                                    current_buffer):
+    run_file = get_command_to_run_current_file_with_nosetests(
+        path_to_current_file)
     current_class = get_current_class(current_line, current_buffer)
-    command = run_file + ":" + current_class
+    command = run_file + "." + current_class
     write_test_command_to_cache_file(command)
     return command
 
 
-def get_command_to_run_current_method_with_nosetests(path_to_current_file, current_line, current_buffer):
-    run_class = get_command_to_run_current_class_with_nosetests(path_to_current_file, current_line, current_buffer)
+def get_command_to_run_current_method_with_nosetests(path_to_current_file,
+                                                     current_line,
+                                                     current_buffer):
+    run_class = get_command_to_run_current_class_with_nosetests(
+        path_to_current_file, current_line, current_buffer)
     current_method = get_current_method(current_line, current_buffer)
     command = run_class + "." + current_method
     write_test_command_to_cache_file(command)
@@ -92,7 +124,7 @@ def write_test_command_to_cache_file(command):
 
 
 def find_path_to_file(current_dir, file_to_look_for):
-    dir_list = [directory for directory in current_dir.split(os.path.sep) if directory]
+    dir_list = [d for d in current_dir.split(os.path.sep) if d]
     for x in range(len(dir_list) - 1, -1, -1):
         path_to_check = os.path.sep + os.path.sep.join(dir_list[:x])
         if file_to_look_for in os.listdir(path_to_check):
@@ -103,7 +135,10 @@ def find_path_to_file(current_dir, file_to_look_for):
 def get_app_name(current_dir):
     apps = get_json_field_from_config_file(current_dir, "app_name")
     try:
-        return [app.lstrip() for app in apps.split(",") if app.lstrip() in current_dir][0]
+        apps = [
+            a.lstrip() for a in apps.split(",") if os.sep + a.lstrip() + os.sep in current_dir
+        ]
+        return apps[0]
     except:
         return False
     return False
